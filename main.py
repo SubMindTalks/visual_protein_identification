@@ -119,6 +119,7 @@ def evaluate_model(classifier: ProteinClassifier, data_manager: DataManager,
     logger.info("Model evaluation complete")
     logger.info(f"Test accuracy: {results['classification_report']['accuracy']:.4f}")
 
+
 def main():
     """Main pipeline execution."""
     args = parse_arguments()
@@ -127,13 +128,39 @@ def main():
     try:
         directories = setup_pipeline()
         logger.info(f"Created pipeline directories at {directories['run']}")
+
         if args.mode in ['visualize', 'full']:
             logger.info("=== Visualization Phase ===")
             processing_results = process_proteins(DATA_DIR, directories['images'])
+
         if args.mode in ['train', 'full']:
             logger.info("=== Training Phase ===")
             data_manager = prepare_dataset(processing_results, directories['run'])
             classifier = train_model(data_manager, directories['models'])
-        if
-::contentReference[oaicite:0]{index=0}
+
+        if args.mode in ['evaluate', 'full']:
+            logger.info("=== Evaluation Phase ===")
+            if args.mode == 'full':
+                # Ensure `data_manager` is prepared if full pipeline is running
+                data_manager = prepare_dataset(processing_results, directories['run'])
+            if args.model_path:
+                logger.info(f"Loading model from {args.model_path}")
+                classifier = ProteinClassifier(num_classes=len(data_manager.label_mapping.values()))
+                classifier.load_model(args.model_path)
+            else:
+                logger.error("Model path must be provided for evaluation.")
+                raise ValueError("No model path provided for evaluation.")
+
+            evaluate_model(classifier, data_manager, directories['results'])
+
+        logger.info("Pipeline completed successfully")
+
+    except Exception as e:
+        logger.error(f"Pipeline failed: {e}", exc_info=True)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
+
 
