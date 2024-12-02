@@ -1,0 +1,9 @@
+venv/*
+*.sh
+.cadence/*
+.idea/*
+*.xml
+*.iml
+*.tiff
+*.jpeg
+.python-version
