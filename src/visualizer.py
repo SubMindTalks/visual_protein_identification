@@ -65,7 +65,7 @@ class ProteinVisualizer:
             logger.error(f"Failed to create viewer: {e}")
             raise VisualizationError(f"Failed to create viewer: {e}")
 
-    def process_pdb(self, pdb_path: str) -> None:
+    def process_pdb(self, pdb_path: str, metadata: dict = None) -> None:
         """Process a single PDB file and generate all visualization types.
         
         Args:

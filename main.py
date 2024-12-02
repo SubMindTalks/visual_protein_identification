@@ -3,9 +3,9 @@ import sys
 from pathlib import Path
 import argparse
 import json
-from typing import Dict, Any
-import torch
 from datetime import datetime
+from multiprocessing import Pool
+import torch
 from config.settings import (
     DATA_DIR, OUTPUT_DIR, MODEL_DIR,
     VISUALIZATION, DATASET, MODEL
@@ -25,7 +25,7 @@ def parse_arguments() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def setup_pipeline() -> Dict[str, Path]:
+def setup_pipeline() -> dict:
     """Set up pipeline directories and return paths."""
     timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
     run_dir = OUTPUT_DIR / f"run_{timestamp}"
@@ -40,42 +40,37 @@ def setup_pipeline() -> Dict[str, Path]:
     return directories
 
 
-def process_proteins(pdb_dir: Path, output_dir: Path) -> Dict[str, Any]:
+def process_protein_file(args):
+    """Process a single protein file."""
+    pdb_path, output_dir = args
+    try:
+        protein_id = pdb_path.stem.split("-")[0]  # Extract base ID
+        metadata = fetch_protein_metadata(protein_id)
+        visualizer = ProteinVisualizer(str(output_dir))
+        result = visualizer.process_pdb(str(pdb_path), metadata)
+        return {"success": True, "result": result}
+    except Exception as e:
+        return {"success": False, "error": str(e), "file": str(pdb_path)}
+
+
+def process_proteins(pdb_dir: Path, output_dir: Path) -> dict:
     """Process protein structures and generate visualizations."""
-    visualizer = ProteinVisualizer(str(output_dir))
-    results = []
-    failed_proteins = []
     pdb_files = list(pdb_dir.glob("*.pdb"))
-    total_files = len(pdb_files)
-    print(f"Found {total_files} PDB files to process")
-    for idx, pdb_path in enumerate(pdb_files, 1):
-        try:
-            print(f"Processing {pdb_path.name} ({idx}/{total_files})")
-            protein_id = pdb_path.stem
-            metadata = fetch_protein_metadata(protein_id)
-            result = visualizer.process_pdb(str(pdb_path), metadata)
-            results.append(result)
-            print(f"Successfully processed {protein_id}")
-            if idx % 10 == 0:
-                print(f"Processed {idx}/{total_files} proteins")
-        except Exception as e:
-            print(f"Failed to process {pdb_path.name}: {e}")
-            failed_proteins.append(str(pdb_path))
-    processing_summary = {
-        'total_proteins': total_files,
-        'successful': len(results),
-        'failed': len(failed_proteins),
-        'failed_list': failed_proteins,
-        'results': results
+    print(f"Found {len(pdb_files)} PDB files to process")
+    with Pool() as pool:
+        results = pool.map(process_protein_file, [(pdb, output_dir) for pdb in pdb_files])
+    successful = [r['result'] for r in results if r['success']]
+    failed = [r for r in results if not r['success']]
+    return {
+        "total_proteins": len(pdb_files),
+        "successful": len(successful),
+        "failed": len(failed),
+        "failed_list": failed,
+        "results": successful,
     }
-    summary_path = output_dir / 'processing_summary.json'
-    with open(summary_path, 'w') as f:
-        json.dump(processing_summary, f, indent=2)
-    print(f"Processing complete. Success: {len(results)}, Failed: {len(failed_proteins)}")
-    return processing_summary
 
 
-def prepare_dataset(processing_results: Dict[str, Any], data_dir: Path) -> DataManager:
+def prepare_dataset(processing_results: dict, data_dir: Path) -> DataManager:
     """Prepare dataset from processing results."""
     data_manager = DataManager(str(data_dir))
     label_mapping = {}
@@ -90,11 +85,9 @@ def prepare_dataset(processing_results: Dict[str, Any], data_dir: Path) -> DataM
 
 def train_model(data_manager: DataManager, model_dir: Path) -> ProteinClassifier:
     """Train the classification model."""
-    dataloaders = data_manager.create_dataloaders(
-        batch_size=MODEL['batch_size']
-    )
+    dataloaders = data_manager.create_dataloaders(batch_size=MODEL['batch_size'])
     print(f"Created dataloaders with batch size {MODEL['batch_size']}")
-    num_classes = len(set(label_mapping.values()))
+    num_classes = len(set(data_manager.label_mapping.values()))
     classifier = ProteinClassifier(num_classes=num_classes)
     print(f"Initialized classifier for {num_classes} classes")
     print("Training model")
@@ -115,7 +108,7 @@ def evaluate_model(classifier: ProteinClassifier, data_manager: DataManager,
                    results_dir: Path) -> None:
     """Evaluate the trained model."""
     dataloaders = data_manager.create_dataloaders(batch_size=MODEL['batch_size'])
-    class_names = sorted(set(label_mapping.values()))
+    class_names = sorted(set(data_manager.label_mapping.values()))
     results = classifier.analyze_results(
         dataloaders['test'],
         class_names=class_names,
