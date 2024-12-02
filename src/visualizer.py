@@ -1,10 +1,9 @@
 """Protein visualization module using Py3Dmol."""
 
 import logging
-from pathlib import Path
-from typing import Optional, Dict, List
 import py3Dmol
-from Bio.PDB import PDBParser
+from pathlib import Path
+from typing import Optional, Dict
 import numpy as np
 import base64
 from io import BytesIO
@@ -12,10 +11,6 @@ from PIL import Image
 from .utils import create_directory
 
 logger = logging.getLogger(__name__)
-
-class VisualizationError(Exception):
-    """Custom exception for visualization-related errors."""
-    pass
 
 class ProteinVisualizer:
     """Handles protein visualization and image generation using Py3Dmol."""
@@ -31,36 +26,27 @@ class ProteinVisualizer:
 
     REPRESENTATION_TYPES = {
         'spheres': {'sphere': {'radius': 1.0}},
-        'surface': {'surface': {'opacity': 0.8}},
-        'mesh': {'wireframe': {'color': 'grey'}},
-        'sticks': {'stick': {}},
-        'ribbon': {'cartoon': {'style': 'ribbon'}},
         'cartoon': {'cartoon': {}},
-        'wireframe': {'line': {}},
-        'spacefill': {'sphere': {'radius': 1.6}}
+        'ribbon': {'cartoon': {'style': 'ribbon'}}
     }
 
     def __init__(self, output_dir: str, width: int = 800, height: int = 800):
-        """Initialize visualizer and set up output directory."""
         self.output_dir = create_directory(output_dir)
         self.width = width
         self.height = height
-        self.parser = PDBParser(QUIET=True)
-        self.viewer = None
-        logger.info(f"Initialized visualizer with output directory: {output_dir}")
+        self._setup_viewer()
 
-    def _initialize_viewer(self) -> None:
-        """Initialize or reinitialize the Py3Dmol viewer."""
+    def _setup_viewer(self):
+        """Initialize the Py3Dmol viewer."""
         try:
-            self.viewer = py3Dmol.view(width=self.width, height=self.height)
+            self.viewer = py3Dmol.view(width=self.width, height=self.height, viewergrid=(1, 1))
             self.viewer.setBackgroundColor('white')
-            self.viewer.removeAllModels()  # Clear any existing models
+            logger.info("Viewer successfully initialized.")
         except Exception as e:
             logger.error(f"Failed to initialize viewer: {e}")
-            raise VisualizationError(f"Failed to initialize viewer: {e}")
+            self.viewer = None  # Explicitly set to None if initialization fails
 
     def process_pdb(self, pdb_path: str, metadata: Optional[dict] = None) -> Dict:
-        """Process a single PDB file and generate visualizations."""
         pdb_path = Path(pdb_path)
         if not pdb_path.exists():
             raise FileNotFoundError(f"PDB file not found: {pdb_path}")
@@ -74,6 +60,9 @@ class ProteinVisualizer:
         try:
             with open(pdb_path, 'r') as f:
                 pdb_content = f.read()
+
+            # Reset viewer for each PDB
+            self._setup_viewer()
 
             for rep_type in self.REPRESENTATION_TYPES:
                 for orientation in self.ORIENTATIONS:
@@ -90,13 +79,16 @@ class ProteinVisualizer:
 
         except Exception as e:
             logger.error(f"Failed to process {pdb_path.name}: {e}")
-            raise VisualizationError(f"Failed to process PDB file: {e}")
+            raise
 
     def _render_view(self, pdb_content: str, pdb_id: str, rep_type: str, orientation: str) -> Optional[Dict]:
-        """Render a specific view of the protein."""
+        if not self.viewer:
+            logger.error("Viewer must be initialized before generating images.")
+            return None
+
         try:
-            # Reinitialize viewer for each view
-            self._initialize_viewer()
+            # Clear previous models
+            self.viewer.removeAllModels()
 
             # Add model and apply style
             self.viewer.addModel(pdb_content, "pdb")
@@ -113,12 +105,15 @@ class ProteinVisualizer:
 
             # Render and save
             png_data = self.viewer.png()
-            png_bytes = base64.b64decode(png_data)
+            if not png_data:
+                logger.error(f"Failed to generate PNG data for {rep_type}-{orientation} view.")
+                return None
 
+            png_bytes = base64.b64decode(png_data)
             with Image.open(BytesIO(png_bytes)) as img:
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                img.save(output_path, 'PNG', optimize=True)
+                img.save(output_path, 'PNG')
 
             return {
                 'path': str(output_path),
@@ -129,15 +124,3 @@ class ProteinVisualizer:
         except Exception as e:
             logger.error(f"Failed to render view {rep_type}-{orientation} for {pdb_id}: {e}")
             return None
-
-    @staticmethod
-    def get_center_of_mass(coords: np.ndarray, masses: Optional[np.ndarray] = None) -> np.ndarray:
-        """Calculate center of mass of protein structure."""
-        if masses is None:
-            masses = np.ones(len(coords))
-
-        total_mass = masses.sum()
-        if total_mass == 0 or coords.size == 0:
-            return np.zeros(3)
-
-        return (coords * masses[:, np.newaxis]).sum(axis=0) / total_mass
